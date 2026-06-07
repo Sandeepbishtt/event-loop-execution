@@ -32,10 +32,28 @@ npm run preview
 
 ## Deploy
 
-Pushes to `main` automatically deploy to GitHub Pages via [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml).
+Pushes to `main` build the app and publish `dist/` to the `gh-pages` branch via [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml).
 
-1. Enable **Settings → Pages → Source: GitHub Actions** on the repo
-2. Push to `main`
+### One-time GitHub setup
+
+1. Open **Settings → Pages**
+2. **Build and deployment → Source:** Deploy from a branch
+3. **Branch:** `gh-pages` / `/ (root)`
+4. Save
+
+After the first successful workflow run, the site is live at:
+
+**https://sandeepbishtt.github.io/event-loop-execution/**
+
+> Do **not** open `/src/main.jsx` — that is dev source only. The built app loads from the URL above.
+
+### Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| 404 on `/src/main.jsx` | Pages is serving raw `main` branch. Switch source to `gh-pages` branch |
+| Blank page | Confirm `vite.config.js` has `base: '/event-loop-execution/'` |
+| Workflow failed | Check **Actions** tab → re-run after fixing Pages settings |
 
 ## Supported syntax (v1)
 
