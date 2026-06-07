@@ -1,16 +1,47 @@
-# React + Vite
+# JS Event Loop Visualizer
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Interactive learning tool for JavaScript call stack, microtask queue, macrotask queue, and event loop execution — built for interview prep.
 
-Currently, two official plugins are available:
+**Live demo:** [https://sandeepbishtt.github.io/event-loop-execution/](https://sandeepbishtt.github.io/event-loop-execution/)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Features
 
-## React Compiler
+- Paste any interview-style JavaScript snippet
+- Predict `console.log` output and submit your answer
+- Visualize execution step-by-step with a line pointer (▶)
+- See call stack, microtask queue, macrotask queue, Web APIs, and console in sync
+- **Manual** mode: step forward/back at your own pace
+- **Auto** mode: play with adjustable speed
+- Educational **Why?** insights for tricky behavior (Promise executor, `resolve()`, `.then`, `setTimeout`)
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Local development
 
-## Expanding the ESLint configuration
+```bash
+npm install
+npm run dev
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Open [http://localhost:5173/event-loop-execution/](http://localhost:5173/event-loop-execution/) (Vite uses the same `base` path as production).
+
+## Build
+
+```bash
+npm run build
+npm run preview
+```
+
+## Deploy
+
+Pushes to `main` automatically deploy to GitHub Pages via [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml).
+
+1. Enable **Settings → Pages → Source: GitHub Actions** on the repo
+2. Push to `main`
+
+## Supported syntax (v1)
+
+- `console.log`, variables, functions
+- `new Promise`, `.then`, `Promise.resolve`
+- `setTimeout` (relative delay ordering)
+- `queueMicrotask`
+
+No `eval` — code is parsed with Acorn and simulated safely.
