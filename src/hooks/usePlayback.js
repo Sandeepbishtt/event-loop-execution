@@ -12,8 +12,17 @@ export function usePlayback(steps, speed = 'normal', playbackMode = 'manual') {
   const [index, setIndex] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
   const intervalRef = useRef(null)
+  const lastHighlightLineRef = useRef(1)
 
   const currentStep = steps[index] ?? null
+
+  useEffect(() => {
+    if (currentStep?.highlightLine !== undefined) {
+      lastHighlightLineRef.current = currentStep.highlightLine
+    }
+  }, [currentStep?.highlightLine, index])
+
+  const highlightLine = currentStep?.highlightLine ?? lastHighlightLineRef.current
   const isAtEnd = steps.length > 0 && index >= steps.length - 1
 
   const stop = useCallback(() => {
@@ -77,12 +86,14 @@ export function usePlayback(steps, speed = 'normal', playbackMode = 'manual') {
 
   useEffect(() => {
     reset()
+    lastHighlightLineRef.current = 1
   }, [steps, reset])
 
   return useMemo(
     () => ({
       index,
       currentStep,
+      highlightLine,
       isPlaying,
       isAtEnd,
       play,
@@ -91,6 +102,6 @@ export function usePlayback(steps, speed = 'normal', playbackMode = 'manual') {
       stepBack,
       reset,
     }),
-    [index, currentStep, isPlaying, isAtEnd, play, pause, stepForward, stepBack, reset],
+    [index, currentStep, highlightLine, isPlaying, isAtEnd, play, pause, stepForward, stepBack, reset],
   )
 }

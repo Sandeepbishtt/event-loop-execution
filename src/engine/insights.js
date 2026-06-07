@@ -15,12 +15,20 @@ export function getInsight(key) {
       'You are inside the Promise executor. This is NOT a microtask — it runs right now, blocking the main thread.',
     resolveCall:
       'resolve() only marks the promise as fulfilled. It does NOT stop the executor — lines after resolve() still run synchronously.',
+    rejectCall:
+      'reject() marks the promise as rejected. Like resolve(), it does not stop the executor — but only the first settle call counts.',
+    settleIgnored:
+      'A promise can only settle once. Further resolve() or reject() calls are silently ignored.',
     promiseFulfilled:
       'The promise is fulfilled. Any .then handlers already registered will be scheduled as microtasks (not run yet if call stack is busy).',
     thenRegister:
       '.then(callback) does not run callback now. It registers a microtask that waits until the call stack is empty.',
     thenFulfilledPromise:
       'This promise is already fulfilled, so .then schedules its callback as a microtask immediately — but still not until sync code finishes.',
+    promiseRejected:
+      'The promise is rejected. The second .then argument (or .catch) will run as a microtask.',
+    thenRejectedPromise:
+      'This promise is already rejected — the error handler (2nd .then arg or .catch) runs as a microtask.',
     microtaskEnqueue:
       'Added to the microtask queue. Microtasks always run before the next macrotask (setTimeout).',
     microtaskRun:
@@ -37,6 +45,8 @@ export function getInsight(key) {
       'console.log runs synchronously wherever it sits — call stack, executor, microtask, or macrotask.',
     chainedThen:
       'Chained .then: the second .then waits for the promise returned by the first .then — so 6 cannot run before 5.',
+    nonFunctionThen:
+      'If .then receives a non-function (like 3 or a Promise), it is ignored and the value passes through to the next step.',
   }
 
   return insights[key]

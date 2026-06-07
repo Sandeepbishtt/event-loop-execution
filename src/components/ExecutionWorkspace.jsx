@@ -24,7 +24,7 @@ export function ExecutionWorkspace({
   onVisualize,
   totalSteps,
 }) {
-  const highlightLine = currentStep?.highlightLine
+  const highlightLine = playback.highlightLine ?? currentStep?.highlightLine
   const activeStackFrame =
     currentStep?.callStack?.length > 0
       ? currentStep.callStack[currentStep.callStack.length - 1]
@@ -121,6 +121,7 @@ ExecutionWorkspace.propTypes = {
     reset: PropTypes.func.isRequired,
     isPlaying: PropTypes.bool.isRequired,
     index: PropTypes.number.isRequired,
+    highlightLine: PropTypes.number,
   }).isRequired,
   speed: PropTypes.string.isRequired,
   onSpeedChange: PropTypes.func.isRequired,

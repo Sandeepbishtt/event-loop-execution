@@ -24,8 +24,19 @@ import { getInsight } from './insights.js'
  * @property {'promise'} type
  * @property {'pending'|'fulfilled'|'rejected'} state
  * @property {*} value
- * @property {Array<{ handler: Function, label: string, childPromise: SimPromise }>} onFulfilled
+ * @property {Array<ThenHandlerEntry>} onFulfilled
+ * @property {Array<ThenHandlerEntry>} onRejected
  * @property {number} id
+ */
+
+/**
+ * @typedef {object} ThenHandlerEntry
+ * @property {SimPromise} childPromise
+ * @property {string} label
+ * @property {number} [sourceLine]
+ * @property {number} [handlerLine]
+ * @property {(value: *) => *} [handler]
+ * @property {'fulfilled'|'rejected'} kind
  */
 
 let promiseIdCounter = 0
@@ -40,6 +51,7 @@ function createPromise() {
     state: 'pending',
     value: undefined,
     onFulfilled: [],
+    onRejected: [],
     id: ++promiseIdCounter,
   }
 }
@@ -70,6 +82,8 @@ export class Simulator {
     this.env = new Environment()
     this.timerOrder = 0
     this.runningMicrotasks = false
+    /** @type {number} */
+    this.currentLine = 1
   }
 
   /**
@@ -79,6 +93,10 @@ export class Simulator {
    * @param {string} [insightKey]
    */
   recordStep(phase, description, highlightLine, insightKey) {
+    if (highlightLine !== undefined) {
+      this.currentLine = highlightLine
+    }
+    const line = highlightLine ?? this.currentLine
     const insight = insightKey ? getInsight(insightKey) : undefined
     const activeStackFrame =
       this.callStack.length > 0 ? this.callStack[this.callStack.length - 1] : undefined
@@ -92,7 +110,7 @@ export class Simulator {
       macrotaskQueue: this.macrotaskQueue.map((t) => t.label),
       webApis: this.webApis.map((t) => ({ label: t.label })),
       consoleOutput: [...this.consoleOutput],
-      highlightLine,
+      highlightLine: line,
       insight,
       activeStackFrame,
     })
@@ -113,61 +131,200 @@ export class Simulator {
    * @param {SimPromise} promise
    * @param {*} value
    */
+  /**
+   * @param {SimPromise} promise
+   * @param {*} value
+   */
   resolvePromise(promise, value) {
-    if (promise.state !== 'pending') return
+    if (promise.state !== 'pending') {
+      this.recordStep(
+        'promise',
+        `resolve() ignored — Promise #${promise.id} already ${promise.state}`,
+        undefined,
+        'settleIgnored',
+      )
+      return
+    }
     promise.state = 'fulfilled'
     promise.value = value
     this.recordStep('promise', `Promise #${promise.id} fulfilled`, undefined, 'promiseFulfilled')
 
-    for (const { handler, label, childPromise, sourceLine } of promise.onFulfilled) {
-      this.enqueueMicrotask(() => {
-        this.callStack.push(label)
-        this.recordStep('microtask', `Running microtask: ${label}`, sourceLine, 'microtaskRun')
-        try {
-          const result = handler()
-          this.resolvePromise(childPromise, result)
-        } catch (err) {
-          childPromise.state = 'rejected'
-          childPromise.value = err
-        } finally {
-          this.callStack.pop()
-          this.recordStep('return', `Finished microtask: ${label}`)
-        }
-      }, label)
+    for (const entry of promise.onFulfilled) {
+      this.scheduleThenMicrotask(entry, value)
     }
   }
 
   /**
    * @param {SimPromise} promise
-   * @param {Function} handler
-   * @param {string} label
+   * @param {*} reason
+   */
+  rejectPromise(promise, reason) {
+    if (promise.state !== 'pending') {
+      this.recordStep(
+        'promise',
+        `reject() ignored — Promise #${promise.id} already ${promise.state}`,
+        undefined,
+        'settleIgnored',
+      )
+      return
+    }
+    promise.state = 'rejected'
+    promise.value = reason
+    this.recordStep('promise', `Promise #${promise.id} rejected`, undefined, 'promiseRejected')
+
+    for (const entry of promise.onRejected) {
+      this.scheduleThenMicrotask(entry, reason)
+    }
+  }
+
+  /**
+   * @param {ThenHandlerEntry} entry
+   * @param {*} settledValue
+   */
+  scheduleThenMicrotask(entry, settledValue) {
+    const { label, childPromise, sourceLine, handlerLine, handler, kind } = entry
+    const execLine = handlerLine ?? sourceLine
+
+    this.enqueueMicrotask(() => {
+      this.callStack.push(label)
+      this.recordStep('microtask', `Running microtask: ${label}`, execLine, 'microtaskRun')
+      try {
+        if (handler) {
+          const result = handler(settledValue)
+          this.resolvePromise(childPromise, result)
+        } else if (kind === 'fulfilled') {
+          this.resolvePromise(childPromise, settledValue)
+        } else {
+          this.rejectPromise(childPromise, settledValue)
+        }
+      } catch (err) {
+        this.rejectPromise(childPromise, err)
+      } finally {
+        this.callStack.pop()
+        this.recordStep('return', `Finished microtask: ${label}`, execLine)
+      }
+    }, label, execLine)
+  }
+
+  /**
+   * @param {SimPromise} promise
+   * @param {((value: *) => *) | null} onFulfilled
+   * @param {((reason: *) => *) | null} onRejected
+   * @param {number} sourceLine
+   * @param {string} [insightOverride]
    * @returns {SimPromise}
    */
-  attachThen(promise, handler, label, sourceLine, insightOverride) {
+  attachThenHandlers(promise, onFulfilled, onRejected, sourceLine, insightOverride) {
     const childPromise = createPromise()
-    const entry = { handler, label, childPromise, sourceLine }
+    const fulfilledLabel = `Promise.then #${++taskIdCounter}`
+    const rejectedLabel = `Promise.then reject #${++taskIdCounter}`
+
+    const fulfilledEntry = {
+      childPromise,
+      label: fulfilledLabel,
+      sourceLine,
+      handlerLine: onFulfilled?.handlerLine ?? sourceLine,
+      handler: onFulfilled?.handler ?? null,
+      kind: 'fulfilled',
+    }
+
+    const rejectedEntry = {
+      childPromise,
+      label: rejectedLabel,
+      sourceLine,
+      handlerLine: onRejected?.handlerLine ?? sourceLine,
+      handler: onRejected?.handler ?? null,
+      kind: 'rejected',
+    }
+
     const insightKey =
       insightOverride ??
-      (promise.state === 'fulfilled' ? 'thenFulfilledPromise' : 'thenRegister')
+      (promise.state === 'fulfilled'
+        ? 'thenFulfilledPromise'
+        : promise.state === 'rejected'
+          ? 'thenRejectedPromise'
+          : 'thenRegister')
 
     if (promise.state === 'fulfilled') {
-      this.enqueueMicrotask(() => {
-        this.callStack.push(label)
-        this.recordStep('microtask', `Running microtask: ${label}`, sourceLine, 'microtaskRun')
-        try {
-          const result = handler()
-          this.resolvePromise(childPromise, result)
-        } finally {
-          this.callStack.pop()
-          this.recordStep('return', `Finished microtask: ${label}`)
-        }
-      }, label, sourceLine, insightKey)
-    } else if (promise.state === 'pending') {
-      promise.onFulfilled.push(entry)
-      this.recordStep('promise', `Registered .then handler: ${label}`, sourceLine, insightKey)
+      this.scheduleThenMicrotask(fulfilledEntry, promise.value)
+      this.recordStep('promise', `Registered .then (already fulfilled): ${fulfilledLabel}`, sourceLine, insightKey)
+    } else if (promise.state === 'rejected') {
+      const entry = onRejected?.handler
+        ? rejectedEntry
+        : {
+            childPromise,
+            label: `Promise.then propagate #${++taskIdCounter}`,
+            sourceLine,
+            handler: null,
+            kind: 'rejected',
+          }
+      this.scheduleThenMicrotask(entry, promise.value)
+      this.recordStep('promise', `Registered .then (already rejected)`, sourceLine, insightKey)
+    } else {
+      promise.onFulfilled.push(fulfilledEntry)
+      promise.onRejected.push(
+        onRejected?.handler
+          ? rejectedEntry
+          : {
+              childPromise,
+              label: `Promise.then propagate #${++taskIdCounter}`,
+              sourceLine,
+              handler: null,
+              kind: 'rejected',
+            },
+      )
+      this.recordStep(
+        'promise',
+        `Registered .then handlers: ${fulfilledLabel}${onRejected?.handler ? ` + ${rejectedLabel}` : ''}`,
+        sourceLine,
+        insightKey,
+      )
     }
 
     return childPromise
+  }
+
+  /**
+   * Build a .then / .catch handler with correct line tracking.
+   * @param {*} fnValue
+   * @param {import('acorn').Expression | null | undefined} sourceNode
+   * @param {number} line
+   * @param {string} label
+   * @returns {{ handler: ((arg: *) => *) | null, handlerLine: number }}
+   */
+  createThenHandler(fnValue, sourceNode, line, label) {
+    const handlerLine = sourceNode ? getLine(sourceNode) ?? line : line
+
+    if (fnValue?.type === 'method' && fnValue.method === 'log') {
+      return {
+        handlerLine,
+        handler: (arg) => {
+          const formatted = formatValue(arg)
+          this.consoleOutput.push(formatted)
+          this.recordStep('microtask', `console.log → "${formatted}"`, handlerLine, 'consoleLog')
+          return undefined
+        },
+      }
+    }
+
+    if (fnValue?.type === 'function') {
+      const bodyLine = getHandlerEntryLine(fnValue) ?? handlerLine
+      return {
+        handlerLine: bodyLine,
+        handler: (arg) => this.callFunction(fnValue, [arg], bodyLine, label),
+      }
+    }
+
+    if (fnValue !== null && fnValue !== undefined) {
+      this.recordStep(
+        'promise',
+        'Non-function passed to .then — value passes through unchanged',
+        handlerLine,
+        'nonFunctionThen',
+      )
+    }
+
+    return { handler: null, handlerLine }
   }
 
   drainMicrotasks() {
@@ -250,7 +407,7 @@ export class Simulator {
 
     switch (node.type) {
       case 'ExpressionStatement':
-        this.evaluate(node.expression, line)
+        this.evaluate(node.expression)
         break
       case 'VariableDeclaration':
         for (const decl of node.declarations) {
@@ -278,10 +435,12 @@ export class Simulator {
 
   /**
    * @param {import('acorn').Expression} node
-   * @param {number} [line]
+   * @param {number} [parentLine]
    * @returns {*}
    */
-  evaluate(node, line = getLine(node)) {
+  evaluate(node, parentLine) {
+    const line = getLine(node) ?? parentLine ?? 1
+
     switch (node.type) {
       case 'Literal':
         return node.value
@@ -302,19 +461,14 @@ export class Simulator {
         }
         throw new Error(`Unsupported unary operator: ${node.operator}`)
       case 'BinaryExpression':
-        if (node.operator === '+') {
-          const left = this.evaluate(node.left, line)
-          const right = this.evaluate(node.right, line)
-          return String(left) + String(right)
-        }
-        throw new Error(`Unsupported binary operator: ${node.operator}`)
+        return this.evaluateBinary(node, line)
       case 'CallExpression': {
         const callee = node.callee
         if (callee.type === 'MemberExpression') {
           return this.evaluateMemberCall(callee, node.arguments, line)
         }
-        const fn = this.evaluate(callee, line)
-        const args = node.arguments.map((arg) => this.evaluate(arg, getLine(arg)))
+        const fn = this.evaluate(callee)
+        const args = node.arguments.map((arg) => this.evaluate(arg))
         return this.callFunction(fn, args, line, 'call')
       }
       case 'NewExpression': {
@@ -324,7 +478,7 @@ export class Simulator {
         throw new Error(`Unsupported new expression at line ${line}`)
       }
       case 'MemberExpression': {
-        const object = this.evaluate(node.object, line)
+        const object = this.evaluate(node.object)
         const property = node.computed
           ? this.evaluate(node.property, line)
           : node.property.name
@@ -347,42 +501,63 @@ export class Simulator {
    * @param {number} line
    */
   evaluateMemberCall(callee, args, line) {
-    const object = this.evaluate(callee.object, line)
+    const memberLine = getLine(callee.property) ?? line
+    const object = this.evaluate(callee.object)
     const property = callee.computed
-      ? this.evaluate(callee.property, line)
+      ? this.evaluate(callee.property, memberLine)
       : callee.property.name
 
     if (object?.type === 'builtin' && object.name === 'Promise' && property === 'resolve') {
       const value = args[0] ? this.evaluate(args[0], line) : undefined
       const promise = createPromise()
-      promise.state = 'fulfilled'
-      promise.value = value
-      this.recordStep('promise', `Promise.resolve() → Promise #${promise.id}`, line)
+      this.resolvePromise(promise, value)
+      this.recordStep('promise', `Promise.resolve() → Promise #${promise.id}`, memberLine)
+      return promise
+    }
+
+    if (object?.type === 'builtin' && object.name === 'Promise' && property === 'reject') {
+      const reason = args[0] ? this.evaluate(args[0]) : undefined
+      const promise = createPromise()
+      this.rejectPromise(promise, reason)
+      this.recordStep('promise', `Promise.reject() → Promise #${promise.id}`, memberLine)
       return promise
     }
 
     if (object?.type === 'builtin' && object.name === 'console' && property === 'log') {
-      const values = args.map((arg) => this.evaluate(arg, getLine(arg)))
+      const values = args.map((arg) => this.evaluate(arg))
       const formatted = values.map((v) => formatValue(v)).join(' ')
       this.consoleOutput.push(formatted)
-      this.recordStep('sync', `console.log → "${formatted}"`, line, 'consoleLog')
+      this.recordStep('sync', `console.log → "${formatted}"`, memberLine, 'consoleLog')
       return undefined
     }
 
-    if (object?.type === 'promise' && property === 'then') {
-      const handler = args[0] ? this.evaluate(args[0], line) : null
-      const label = `Promise.then #${++taskIdCounter}`
+    if (object?.type === 'promise' && (property === 'then' || property === 'catch')) {
       const isChained = callee.object?.type === 'CallExpression'
       const insightKey = isChained ? 'chainedThen' : undefined
+      const fulfilledLabel = `Promise.then #${taskIdCounter + 1}`
+      const rejectedLabel = `Promise.then reject #${taskIdCounter + 2}`
 
-      if (handler?.type === 'function') {
-        const fn = handler
-        const bodyLine = getHandlerEntryLine(fn)
-        const wrappedHandler = () => this.callFunction(fn, [], bodyLine ?? line, label)
-        return this.attachThen(object, wrappedHandler, label, line, insightKey)
-      }
+      const fulfilledArgNode = property === 'catch' ? null : args[0]
+      const rejectedArgNode = property === 'catch' ? args[0] : args[1]
 
-      return this.attachThen(object, () => undefined, label, line, insightKey)
+      const onFulfilled =
+        property === 'catch'
+          ? { handler: null, handlerLine: memberLine }
+          : this.createThenHandler(
+              fulfilledArgNode ? this.evaluate(fulfilledArgNode) : null,
+              fulfilledArgNode,
+              memberLine,
+              fulfilledLabel,
+            )
+
+      const onRejected = this.createThenHandler(
+        rejectedArgNode ? this.evaluate(rejectedArgNode) : null,
+        rejectedArgNode,
+        memberLine,
+        rejectedLabel,
+      )
+
+      return this.attachThenHandlers(object, onFulfilled, onRejected, memberLine, insightKey)
     }
 
     throw new Error(`Unsupported method call at line ${line}: ${property}`)
@@ -398,6 +573,9 @@ export class Simulator {
     if (typeof fn === 'function' && !fn?.type) {
       if (fn.__simName === 'resolve') {
         this.recordStep('promise', 'resolve() called', line, 'resolveCall')
+      }
+      if (fn.__simName === 'reject') {
+        this.recordStep('promise', 'reject() called', line, 'rejectCall')
       }
       return fn(...args)
     }
@@ -473,10 +651,9 @@ export class Simulator {
       const resolve = Object.assign((value) => this.resolvePromise(promise, value), {
         __simName: 'resolve',
       })
-      const reject = (value) => {
-        promise.state = 'rejected'
-        promise.value = value
-      }
+      const reject = Object.assign((value) => this.rejectPromise(promise, value), {
+        __simName: 'reject',
+      })
       this.callStack.push(`Promise executor #${promise.id}`)
       this.recordStep('call', `Run Promise executor #${promise.id}`, line)
       this.executeFunctionBody(executor, [resolve, reject])
@@ -485,6 +662,30 @@ export class Simulator {
     }
 
     return promise
+  }
+
+  /**
+   * @param {import('acorn').BinaryExpression} node
+   * @param {number} line
+   */
+  evaluateBinary(node, line) {
+    const left = this.evaluate(node.left, getLine(node.left) ?? line)
+    const right = this.evaluate(node.right, getLine(node.right) ?? line)
+
+    switch (node.operator) {
+      case '+':
+        return typeof left === 'string' || typeof right === 'string'
+          ? String(left) + String(right)
+          : Number(left) + Number(right)
+      case '-':
+        return Number(left) - Number(right)
+      case '*':
+        return Number(left) * Number(right)
+      case '/':
+        return Number(left) / Number(right)
+      default:
+        throw new Error(`Unsupported binary operator: ${node.operator}`)
+    }
   }
 
   /**

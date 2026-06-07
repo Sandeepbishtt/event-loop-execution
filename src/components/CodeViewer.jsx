@@ -24,9 +24,11 @@ export function CodeViewer({
   const isOnStack = Boolean(highlightLine && activeStackFrame)
 
   useEffect(() => {
-    if (highlightLine && activeLineRef.current) {
-      activeLineRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' })
-    }
+    if (!highlightLine) return undefined
+    const frameId = requestAnimationFrame(() => {
+      activeLineRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
+    return () => cancelAnimationFrame(frameId)
   }, [highlightLine])
 
   if (isEditing) {
